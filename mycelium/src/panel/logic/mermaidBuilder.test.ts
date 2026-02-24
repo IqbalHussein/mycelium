@@ -8,6 +8,7 @@ import {
   extractParticipant,
   extractPath,
   sanitizeParticipant,
+  truncatePath,
 } from './mermaidBuilder';
 import type { NetworkRequest } from '../../utils/types';
 
@@ -32,16 +33,45 @@ describe('extractParticipant', () => {
   });
 });
 
+describe('truncatePath', () => {
+  it('returns short paths unchanged', () => {
+    expect(truncatePath('/users/123', 30)).toBe('/users/123');
+  });
+
+  it('returns paths at exactly maxLength unchanged', () => {
+    const path = '/a'.repeat(15); // 30 chars
+    expect(truncatePath(path, 30)).toBe(path);
+  });
+
+  it('center-truncates long paths with ellipsis', () => {
+    const path = '/assets/js/chunk-a1b2c3d4e5f6g7h8.min.js';
+    const result = truncatePath(path, 30);
+    expect(result.length).toBeLessThanOrEqual(30);
+    expect(result).toContain('…');
+    // Should keep the beginning and end
+    expect(result.startsWith('/assets')).toBe(true);
+    expect(result.endsWith('.min.js')).toBe(true);
+  });
+
+  it('preserves start and end of CDN-hashed URLs', () => {
+    const path = '/static/media/hero-image-abc123def456.webp';
+    const result = truncatePath(path, 30);
+    expect(result).toContain('…');
+    expect(result.startsWith('/static')).toBe(true);
+    expect(result.endsWith('.webp')).toBe(true);
+  });
+});
+
 describe('extractPath', () => {
   it('extracts pathname from URL', () => {
     expect(extractPath('https://api.example.com/users/123')).toBe('/users/123');
   });
 
-  it('truncates long paths', () => {
-    const longPath = '/a'.repeat(30);
+  it('center-truncates long paths', () => {
+    const longPath = '/assets/js/chunk-' + 'x'.repeat(40) + '.min.js';
     const result = extractPath(`https://example.com${longPath}`);
-    expect(result.length).toBeLessThanOrEqual(50);
-    expect(result).toContain('...');
+    expect(result.length).toBeLessThanOrEqual(30);
+    expect(result).toContain('…');
   });
 
   it('returns "/" for invalid URL', () => {
