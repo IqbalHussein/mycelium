@@ -16,6 +16,12 @@ export const EXCLUDED_TYPES: string[] = [
   'image', 'stylesheet', 'font', 'media',
 ];
 
+/** Hostname substrings associated with CDN / media delivery noise. */
+export const FILTERED_HOSTNAME_PATTERNS: string[] = [
+  'cdn',
+  'scontent',
+];
+
 /**
  * Determines whether a request should be filtered out of the diagram.
  * @param url - The request URL.
@@ -26,5 +32,18 @@ export function shouldFilterRequest(url: string, resourceType: string): boolean 
   const cleanUrl = url.toLowerCase().split('?')[0];
   const isAsset = IGNORED_EXTENSIONS.some(ext => cleanUrl.endsWith(ext));
   const isExcludedType = EXCLUDED_TYPES.includes(resourceType);
-  return isAsset || isExcludedType;
+  const isCdnHost = isFilteredHostname(url);
+  return isAsset || isExcludedType || isCdnHost;
+}
+
+/**
+ * Checks whether the URL's hostname matches a known CDN / media pattern.
+ */
+function isFilteredHostname(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return FILTERED_HOSTNAME_PATTERNS.some(pattern => hostname.includes(pattern));
+  } catch {
+    return false;
+  }
 }

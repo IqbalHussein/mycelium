@@ -222,6 +222,14 @@ html,
   height: auto;
 }
 
+.interactive-label {
+  transition: opacity 0.15s;
+}
+
+.interactive-label:hover {
+  opacity: 0.7;
+}
+
 .diagram-error {
   display: flex;
   align-items: center;

@@ -59,6 +59,25 @@ describe('shouldFilterRequest', () => {
     });
   });
 
+  describe('filters CDN / media-delivery hostnames', () => {
+    const cdnCases = [
+      ['https://cdn.example.com/api/data', 'xmlhttprequest'],
+      ['https://static-cdn.example.com/chunk.json', 'fetch'],
+      ['https://scontent.fcdn1-1.fna.fbcdn.net/v/image123', 'xmlhttprequest'],
+      ['https://scontent-lax3-2.xx.fbcdn.net/media/abc', 'fetch'],
+    ] as const;
+
+    for (const [url, type] of cdnCases) {
+      it(`filters ${new URL(url).hostname}`, () => {
+        expect(shouldFilterRequest(url, type)).toBe(true);
+      });
+    }
+
+    it('does not filter non-CDN hostnames', () => {
+      expect(shouldFilterRequest('https://api.example.com/users', 'xmlhttprequest')).toBe(false);
+    });
+  });
+
   it('has a non-empty IGNORED_EXTENSIONS list', () => {
     expect(IGNORED_EXTENSIONS.length).toBeGreaterThan(0);
   });
