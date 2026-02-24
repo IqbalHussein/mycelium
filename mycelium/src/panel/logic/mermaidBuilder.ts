@@ -24,17 +24,38 @@ export function extractParticipant(url: string): string {
   }
 }
 
+/** Maximum path length before center-truncation kicks in. */
+const MAX_PATH_LENGTH = 30;
+
 /**
  * Extracts the pathname from a URL for the arrow label.
+ * Paths exceeding MAX_PATH_LENGTH are center-truncated to preserve
+ * both the leading route prefix and the trailing identifier/hash,
+ * keeping the diagram at a consistent width.
  */
 export function extractPath(url: string): string {
   try {
     const { pathname } = new URL(url);
-    // Truncate long paths
-    return pathname.length > 50 ? pathname.slice(0, 47) + '...' : pathname;
+    return truncatePath(pathname, MAX_PATH_LENGTH);
   } catch {
     return '/';
   }
+}
+
+/**
+ * Center-truncates a path string, keeping the first `keep` and last `keep`
+ * characters with an ellipsis in the middle.
+ *
+ * Example: "/assets/js/chunk-a1b2c3d4e5f6.min.js" → "/assets/js/c…6.min.js"
+ */
+export function truncatePath(path: string, maxLength: number): string {
+  if (path.length <= maxLength) return path;
+
+  // Split the budget evenly between head and tail, accounting for the ellipsis
+  const keep = Math.floor((maxLength - 1) / 2);  // 1 char for "…"
+  const head = path.slice(0, keep);
+  const tail = path.slice(-keep);
+  return `${head}…${tail}`;
 }
 
 /**
