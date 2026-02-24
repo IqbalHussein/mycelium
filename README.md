@@ -19,10 +19,7 @@ The Chrome Network tab shows requests chronologically in a waterfall. When a sin
 - **Clear** — One-click reset to start a fresh capture session
 - **Dark / Light Mode** — Automatically matches your DevTools theme
 - **Performance** — 500ms batching buffer prevents UI flicker; diagram capped at 30 requests
-<<<<<<< HEAD
 
-=======
->>>>>>> 6e2e9adbedb0f1dcd010e09fb104050b11357f2b
 ## Architecture
 
 ```
