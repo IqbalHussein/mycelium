@@ -2,25 +2,24 @@
  * Mycelium Background Service Worker (Orchestrator).
  *
  * Listens to chrome.webRequest events, filters out static assets (FR-02),
- * batches incoming requests in a 500ms buffer (TR-05), and relays them
- * to the connected DevTools panel via a long-lived port.
+ * batches incoming requests and responses in a 500ms buffer (TR-05), and
+ * relays them to the connected DevTools panel via a long-lived port.
  */
 
 import { shouldFilterRequest } from '../utils/filters';
-import type { NetworkRequest } from '../utils/types';
+import type { BackgroundMessage, NetworkRequest, PanelMessage, ResponseUpdate } from '../utils/types';
 
-interface Connection {
-  [tabId: number]: chrome.runtime.Port;
+interface TabState {
+  port: chrome.runtime.Port;
+  /** Requests intercepted since the last flush. */
+  requests: NetworkRequest[];
+  /** Responses for requests that were already flushed to the panel. */
+  responses: ResponseUpdate[];
+  flushTimer: ReturnType<typeof setInterval>;
 }
 
-const connections: Connection = {};
-
-/** Per-tab batching buffer. Flushes every 500ms. */
-const batchBuffers: { [tabId: number]: NetworkRequest[] } = {};
+const tabs = new Map<number, TabState>();
 const BATCH_INTERVAL_MS = 500;
-
-/** Per-tab response header storage (populated by onCompleted). */
-const pendingHeaders: { [requestId: string]: { headers: Record<string, string>; statusCode: number } } = {};
 
 // ──────────────────────────────────────────────
 // Port connection management
@@ -29,11 +28,9 @@ const pendingHeaders: { [requestId: string]: { headers: Record<string, string>; 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'mycelium') return;
 
-  const extensionListener = (message: { name: string; tabId?: number }) => {
-    if (message.name === 'init' && message.tabId !== undefined) {
-      connections[message.tabId] = port;
-      startBatchFlush(message.tabId);
-      return;
+  const extensionListener = (message: PanelMessage) => {
+    if (message.name === 'init') {
+      registerTab(message.tabId, port);
     }
     // Heartbeat — no-op, just keeps SW alive
   };
@@ -42,59 +39,61 @@ chrome.runtime.onConnect.addListener((port) => {
 
   port.onDisconnect.addListener(() => {
     port.onMessage.removeListener(extensionListener);
-
-    const tabs = Object.keys(connections);
-    for (const tabKey of tabs) {
-      const tabId = Number(tabKey);
-      if (connections[tabId] === port) {
-        delete connections[tabId];
-        delete batchBuffers[tabId];
+    for (const [tabId, state] of tabs) {
+      if (state.port === port) {
+        unregisterTab(tabId);
         break;
       }
     }
   });
 });
 
+function registerTab(tabId: number, port: chrome.runtime.Port): void {
+  // Re-init (e.g. DevTools reopened) replaces the old state and its timer
+  unregisterTab(tabId);
+  tabs.set(tabId, {
+    port,
+    requests: [],
+    responses: [],
+    flushTimer: setInterval(() => flush(tabId), BATCH_INTERVAL_MS),
+  });
+}
+
+function unregisterTab(tabId: number): void {
+  const state = tabs.get(tabId);
+  if (!state) return;
+  clearInterval(state.flushTimer);
+  tabs.delete(tabId);
+}
+
 // ──────────────────────────────────────────────
-// Batch buffer flush loop
+// Batch buffer flush
 // ──────────────────────────────────────────────
 
-function startBatchFlush(tabId: number): void {
-  if (!batchBuffers[tabId]) {
-    batchBuffers[tabId] = [];
+function flush(tabId: number): void {
+  const state = tabs.get(tabId);
+  if (!state) return;
+
+  const messages: BackgroundMessage[] = [];
+  if (state.requests.length > 0) {
+    messages.push({ source: 'mycelium-bg', kind: 'requests', payload: state.requests });
   }
+  if (state.responses.length > 0) {
+    messages.push({ source: 'mycelium-bg', kind: 'responses', payload: state.responses });
+  }
+  if (messages.length === 0) return;
 
-  setInterval(() => {
-    const buffer = batchBuffers[tabId];
-    if (!buffer || buffer.length === 0) return;
+  state.requests = [];
+  state.responses = [];
 
-    const port = connections[tabId];
-    if (!port) return;
-
-    // Merge any pending response headers
-    const enriched = buffer.map((req) => {
-      const headersData = pendingHeaders[req.requestId];
-      if (headersData) {
-        req.responseHeaders = headersData.headers;
-        req.statusCode = headersData.statusCode;
-        delete pendingHeaders[req.requestId];
-      }
-      return req;
-    });
-
-    try {
-      port.postMessage({
-        source: 'mycelium-bg',
-        payload: enriched,
-      });
-    } catch {
-      // Port disconnected
-      delete connections[tabId];
-      delete batchBuffers[tabId];
+  try {
+    for (const message of messages) {
+      state.port.postMessage(message);
     }
-
-    batchBuffers[tabId] = [];
-  }, BATCH_INTERVAL_MS);
+  } catch {
+    // Port disconnected
+    unregisterTab(tabId);
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -103,24 +102,20 @@ function startBatchFlush(tabId: number): void {
 
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
-    const { tabId, url, method, requestId, type } = details;
+    const { tabId, url, method, requestId, type, timeStamp } = details;
 
     // Ignore requests not from a tracked tab
-    if (tabId < 0 || !connections[tabId]) return undefined;
+    const state = tabs.get(tabId);
+    if (!state) return undefined;
 
     // FR-02: Asset filtering
     if (shouldFilterRequest(url, type)) return undefined;
 
-    // Push to batch buffer
-    if (!batchBuffers[tabId]) {
-      batchBuffers[tabId] = [];
-    }
-
-    batchBuffers[tabId].push({
+    state.requests.push({
       requestId,
       url,
       method,
-      timestamp: Date.now(),
+      timestamp: timeStamp,
       type,
     });
 
@@ -135,8 +130,9 @@ chrome.webRequest.onBeforeRequest.addListener(
 
 chrome.webRequest.onCompleted.addListener(
   (details) => {
-    const { tabId, requestId, responseHeaders, statusCode } = details;
-    if (tabId < 0 || !connections[tabId]) return;
+    const { tabId, requestId, responseHeaders, statusCode, url, type } = details;
+    const state = tabs.get(tabId);
+    if (!state || shouldFilterRequest(url, type)) return;
 
     const headers: Record<string, string> = {};
     if (responseHeaders) {
@@ -147,7 +143,15 @@ chrome.webRequest.onCompleted.addListener(
       }
     }
 
-    pendingHeaders[requestId] = { headers, statusCode };
+    // If the request hasn't been flushed yet, attach the response directly;
+    // otherwise queue an update for the panel to merge by requestId.
+    const pending = state.requests.find((req) => req.requestId === requestId);
+    if (pending) {
+      pending.statusCode = statusCode;
+      pending.responseHeaders = headers;
+    } else {
+      state.responses.push({ requestId, statusCode, responseHeaders: headers });
+    }
   },
   { urls: ['<all_urls>'] },
   ['responseHeaders'],

@@ -8,7 +8,7 @@
 import type { NetworkRequest } from '../../utils/types';
 
 /** Maximum number of requests to include in the diagram. */
-const MAX_REQUESTS = 30;
+export const MAX_DIAGRAM_REQUESTS = 30;
 
 /**
  * Extracts the hostname from a URL for use as a participant name.
@@ -67,43 +67,80 @@ export function sanitizeParticipant(hostname: string): string {
 }
 
 /**
+ * Escapes characters that Mermaid treats as syntax inside message text.
+ * `;` ends a statement and `#` starts an entity code, so both are
+ * replaced with their Mermaid entity codes.
+ */
+export function escapeMessageText(text: string): string {
+  return text.replace(/[#;]/g, (ch) => `#${ch.charCodeAt(0)};`);
+}
+
+/**
+ * Maps each hostname to a unique Mermaid participant alias. Hosts that
+ * sanitize to the same alias (e.g. "a-b.com" and "a_b.com") get a
+ * numeric suffix so they stay separate participants.
+ */
+function assignAliases(hosts: Iterable<string>): Map<string, string> {
+  const aliases = new Map<string, string>();
+  const used = new Set<string>(['Browser']);
+  for (const host of hosts) {
+    if (aliases.has(host)) continue;
+    const base = sanitizeParticipant(host);
+    let alias = base;
+    for (let n = 2; used.has(alias); n++) {
+      alias = `${base}_${n}`;
+    }
+    used.add(alias);
+    aliases.set(host, alias);
+  }
+  return aliases;
+}
+
+/**
+ * Returns, for each message arrow in the diagram (in render order), the
+ * index into the capped request list it belongs to. Response arrows map
+ * to the same request as their request arrow.
+ */
+export function buildMessageIndex(requests: NetworkRequest[]): number[] {
+  const capped = requests.slice(-MAX_DIAGRAM_REQUESTS);
+  const index: number[] = [];
+  capped.forEach((req, i) => {
+    index.push(i);
+    if (req.statusCode !== undefined) index.push(i);
+  });
+  return index;
+}
+
+/**
  * Builds a complete Mermaid sequence diagram string from requests.
- * Caps at the last MAX_REQUESTS entries.
+ * Caps at the last MAX_DIAGRAM_REQUESTS entries.
  *
  * @param requests - Array of network requests.
  * @returns Mermaid syntax string.
  */
 export function buildSequenceDiagram(requests: NetworkRequest[]): string {
   // Only show the last N requests
-  const capped = requests.slice(-MAX_REQUESTS);
+  const capped = requests.slice(-MAX_DIAGRAM_REQUESTS);
 
   if (capped.length === 0) {
     return 'sequenceDiagram\n    Note over Browser: Waiting for traffic...';
   }
 
-  // Collect unique participants
-  const participantSet = new Set<string>();
-  for (const req of capped) {
-    participantSet.add(extractParticipant(req.url));
-  }
+  const aliases = assignAliases(capped.map((req) => extractParticipant(req.url)));
 
   const lines: string[] = ['sequenceDiagram'];
 
   // Declare participants
   lines.push('    participant Browser');
-  for (const host of participantSet) {
-    const alias = sanitizeParticipant(host);
-    if (alias !== 'Browser') {
-      lines.push(`    participant ${alias} as ${host}`);
-    }
+  for (const [host, alias] of aliases) {
+    lines.push(`    participant ${alias} as ${host}`);
   }
 
   // Draw arrows for each request
   for (const req of capped) {
-    const host = extractParticipant(req.url);
-    const alias = sanitizeParticipant(host);
+    const alias = aliases.get(extractParticipant(req.url))!;
     const path = extractPath(req.url);
-    const label = `${req.method} ${path}`;
+    const label = escapeMessageText(`${req.method} ${path}`);
 
     // Request arrow
     lines.push(`    Browser->>${alias}: ${label}`);

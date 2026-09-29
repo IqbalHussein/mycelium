@@ -4,7 +4,9 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  buildMessageIndex,
   buildSequenceDiagram,
+  escapeMessageText,
   extractParticipant,
   extractPath,
   sanitizeParticipant,
@@ -132,5 +134,48 @@ describe('buildSequenceDiagram', () => {
     ]);
     expect(result).toContain('auth_example_com');
     expect(result).toContain('api_example_com');
+  });
+});
+
+describe('escapeMessageText', () => {
+  it('escapes semicolons and hashes as Mermaid entity codes', () => {
+    expect(escapeMessageText('GET /a;jsessionid=1#x')).toBe('GET /a#59;jsessionid=1#35;x');
+  });
+});
+
+describe('buildSequenceDiagram escaping and aliases', () => {
+  it('escapes semicolons in paths so they do not end the statement', () => {
+    const result = buildSequenceDiagram([makeRequest({ url: 'https://api.example.com/a;jsessionid=1' })]);
+    expect(result).toContain('GET /a#59;jsessionid=1');
+    expect(result).not.toMatch(/\/a;/);
+  });
+
+  it('gives hosts that sanitize identically distinct aliases', () => {
+    const result = buildSequenceDiagram([
+      makeRequest({ url: 'https://a-b.com/x' }),
+      makeRequest({ url: 'https://a_b.com/y', requestId: '2' }),
+    ]);
+    expect(result).toContain('participant a_b_com as a-b.com');
+    expect(result).toContain('participant a_b_com_2 as a_b.com');
+    expect(result).toContain('Browser->>a_b_com_2: GET /y');
+  });
+});
+
+describe('buildMessageIndex', () => {
+  it('maps response arrows back to their request', () => {
+    const requests = [
+      makeRequest({ requestId: 'a', statusCode: 200 }),
+      makeRequest({ requestId: 'b' }),
+      makeRequest({ requestId: 'c', statusCode: 404 }),
+    ];
+    // a-req, a-res, b-req, c-req, c-res
+    expect(buildMessageIndex(requests)).toEqual([0, 0, 1, 2, 2]);
+  });
+
+  it('indexes into the capped list', () => {
+    const requests = Array.from({ length: 35 }, (_, i) => makeRequest({ requestId: String(i) }));
+    const index = buildMessageIndex(requests);
+    expect(index).toHaveLength(30);
+    expect(index[29]).toBe(29);
   });
 });

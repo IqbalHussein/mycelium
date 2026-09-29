@@ -16,7 +16,11 @@ export const EXCLUDED_TYPES: string[] = [
   'image', 'stylesheet', 'font', 'media',
 ];
 
-/** Hostname substrings associated with CDN / media delivery noise. */
+/**
+ * Hostname labels associated with CDN / media delivery noise. A hostname
+ * matches when one of its dot- or dash-separated parts equals a pattern,
+ * optionally followed by digits (e.g. "cdn", "cdn2", "static-cdn").
+ */
 export const FILTERED_HOSTNAME_PATTERNS: string[] = [
   'cdn',
   'scontent',
@@ -41,8 +45,12 @@ export function shouldFilterRequest(url: string, resourceType: string): boolean 
  */
 function isFilteredHostname(url: string): boolean {
   try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    return FILTERED_HOSTNAME_PATTERNS.some(pattern => hostname.includes(pattern));
+    const parts = new URL(url).hostname.toLowerCase().split(/[.-]/);
+    return parts.some(part =>
+      FILTERED_HOSTNAME_PATTERNS.some(pattern =>
+        part.startsWith(pattern) && /^\d*$/.test(part.slice(pattern.length)),
+      ),
+    );
   } catch {
     return false;
   }

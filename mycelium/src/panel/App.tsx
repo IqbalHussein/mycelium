@@ -14,16 +14,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Toolbar from './components/Toolbar';
 import DiagramCanvas from './components/DiagramCanvas';
 import RequestInspector from './components/RequestInspector';
+import { appendRequests, applyResponses } from './logic/requestState';
 import { createPort, sendInit, startHeartbeat } from '../utils/messaging';
 import type { NetworkRequest, BackgroundMessage } from '../utils/types';
 import '../index.css';
 
-/** Maximum requests to keep in state. */
-const MAX_REQUESTS = 30;
-
 export default function App() {
   const [requests, setRequests] = useState<NetworkRequest[]>([]);
-  const [selectedRequest, setSelectedRequest] = useState<NetworkRequest | null>(null);
+  // Store the id, not the object, so the inspector picks up late responses
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
+  const selectedRequest = requests.find((req) => req.requestId === selectedRequestId) ?? null;
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef = useRef(false);
 
@@ -43,13 +43,13 @@ export default function App() {
       // When paused, discard incoming messages so the diagram stays frozen
       if (isPausedRef.current) return;
 
-      const incoming = Array.isArray(msg.payload) ? msg.payload : [msg.payload];
-
-      setRequests((prev) => {
-        const updated = [...prev, ...incoming];
-        // Cap to last MAX_REQUESTS
-        return updated.length > MAX_REQUESTS ? updated.slice(-MAX_REQUESTS) : updated;
-      });
+      if (msg.kind === 'requests') {
+        const incoming = msg.payload;
+        setRequests((prev) => appendRequests(prev, incoming));
+      } else {
+        const updates = msg.payload;
+        setRequests((prev) => applyResponses(prev, updates));
+      }
     };
 
     port.onMessage.addListener(messageListener);
@@ -63,7 +63,7 @@ export default function App() {
 
   const handleClear = useCallback(() => {
     setRequests([]);
-    setSelectedRequest(null);
+    setSelectedRequestId(null);
   }, []);
 
   const handleTogglePause = useCallback(() => {
@@ -71,11 +71,11 @@ export default function App() {
   }, []);
 
   const handleSelectRequest = useCallback((request: NetworkRequest) => {
-    setSelectedRequest(request);
+    setSelectedRequestId(request.requestId);
   }, []);
 
   const handleCloseInspector = useCallback(() => {
-    setSelectedRequest(null);
+    setSelectedRequestId(null);
   }, []);
 
   return (

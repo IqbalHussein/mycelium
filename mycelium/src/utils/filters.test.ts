@@ -76,6 +76,22 @@ describe('shouldFilterRequest', () => {
     it('does not filter non-CDN hostnames', () => {
       expect(shouldFilterRequest('https://api.example.com/users', 'xmlhttprequest')).toBe(false);
     });
+
+    it('filters numbered CDN hostnames', () => {
+      expect(shouldFilterRequest('https://cdn2.example.com/api/data', 'fetch')).toBe(true);
+    });
+
+    const lookalikeCases = [
+      'https://cdnapi.example.com/users',
+      'https://api.mycdnvendor.com/v1/sites',
+      'https://scontentful.example.com/entries',
+    ];
+
+    for (const url of lookalikeCases) {
+      it(`does not filter look-alike host ${new URL(url).hostname}`, () => {
+        expect(shouldFilterRequest(url, 'xmlhttprequest')).toBe(false);
+      });
+    }
   });
 
   it('has a non-empty IGNORED_EXTENSIONS list', () => {

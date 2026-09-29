@@ -8,17 +8,20 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import mermaid from 'mermaid';
-import { buildSequenceDiagram } from '../logic/mermaidBuilder';
+import {
+  buildSequenceDiagram,
+  buildMessageIndex,
+  MAX_DIAGRAM_REQUESTS,
+} from '../logic/mermaidBuilder';
 import { getMermaidConfig } from '../config/mermaidConfig';
 import type { NetworkRequest } from '../../utils/types';
+
+mermaid.initialize(getMermaidConfig());
 
 interface DiagramCanvasProps {
   requests: NetworkRequest[];
   onSelectRequest: (request: NetworkRequest) => void;
 }
-
-/** Maximum requests shown in the diagram (must match mermaidBuilder). */
-const MAX_DIAGRAM_REQUESTS = 30;
 
 export default function DiagramCanvas({ requests, onSelectRequest }: DiagramCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,44 +54,49 @@ export default function DiagramCanvas({ requests, onSelectRequest }: DiagramCanv
       const index = Array.from(allMessages).indexOf(messageNode);
       if (index === -1) return;
 
+      // Response arrows also render a .messageText, so map the message
+      // position back to its request instead of indexing directly.
+      const requestIndex = buildMessageIndex(requestsRef.current)[index];
+      if (requestIndex === undefined) return;
+
       const cappedRequests = requestsRef.current.slice(-MAX_DIAGRAM_REQUESTS);
-      if (index < cappedRequests.length) {
-        onSelectRequest(cappedRequests[index]);
-      }
+      onSelectRequest(cappedRequests[requestIndex]);
     },
     [onSelectRequest],
   );
 
   // ── Render Mermaid SVG ───────────────────────────────────────
-  const renderDiagram = useCallback(async () => {
-    if (!containerRef.current) return;
-
+  // Renders are async; a cancelled flag drops results from renders that
+  // were superseded by a newer request list.
+  useEffect(() => {
+    let cancelled = false;
     const diagramStr = buildSequenceDiagram(requests);
     renderIdRef.current += 1;
     const id = `mycelium-diagram-${renderIdRef.current}`;
 
-    try {
-      mermaid.initialize(getMermaidConfig());
-      const { svg } = await mermaid.render(id, diagramStr);
-      if (containerRef.current) {
-        containerRef.current.innerHTML = svg;
+    mermaid
+      .render(id, diagramStr)
+      .then(({ svg }) => {
+        const container = containerRef.current;
+        if (cancelled || !container) return;
+        container.innerHTML = svg;
         setError(null);
 
         // Mark message labels as interactive (cursor + highlight)
-        const textElements = containerRef.current.querySelectorAll('.messageText');
-        textElements.forEach((el) => {
+        container.querySelectorAll('.messageText').forEach((el) => {
           (el as HTMLElement).style.cursor = 'pointer';
           el.classList.add('interactive-label');
         });
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Diagram render failed');
-    }
-  }, [requests]);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Diagram render failed');
+      });
 
-  useEffect(() => {
-    renderDiagram();
-  }, [renderDiagram]);
+    return () => {
+      cancelled = true;
+    };
+  }, [requests]);
 
   return (
     <div className="diagram-canvas">
